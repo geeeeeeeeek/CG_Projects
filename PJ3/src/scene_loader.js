@@ -26,10 +26,17 @@ class SceneLoader {
         let floorLoader = new FloorLoader(this.gl);
         floorLoader.init();
 
-        setTimeout(()=> {
-            let boxLoader = new BoxLoader(this.gl);
-            boxLoader.init();
-        }, 0);
+        //setTimeout(()=> {
+        let boxLoader = new BoxLoader(this.gl);
+        boxLoader.init();
+        //}, 0);
+
+        var render = () => {
+            floorLoader.render();
+            boxLoader.render();
+            window.requestAnimationFrame(render);
+        };
+        render();
     }
 
     initWebGL() {
