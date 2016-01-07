@@ -5,14 +5,20 @@
 
 class KeyboardListener {
     constructor() {
-        this.map = new Map();
+        this.ON = false;
+        this.last = {};
 
         document.addEventListener('keydown', (event)=> {
-            let key = String.fromCharCode(event.keyCode);;
-            let callback = this.map.get(key);
-            if (callback && typeof (callback) == 'function') {
-                callback();
-            }
+            let key = String.fromCharCode(event.which);
+            if (this.last[key]) return;
+
+            this.last[key] = event.timeStamp;
+            this.ON = true;
+        });
+        document.addEventListener('keyup', (event)=> {
+            let key = String.fromCharCode(event.which);
+            this.last[key] = undefined;
+            this.ON = false;
         })
 
     }
