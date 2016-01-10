@@ -4,7 +4,7 @@
  * @param gl GL context
  * @param vshader a vertex shader program (string)
  * @param fshader a fragment shader program (string)
- * @return true, if the program object was created and successfully made current 
+ * @return true, if the program object was created and successfully made current
  */
 function initShaders(gl, vshader, fshader) {
   var program = createProgram(gl, vshader, fshader);
@@ -93,7 +93,7 @@ function loadShader(gl, type, source) {
   return shader;
 }
 
-/** 
+/**
  * Initialize and get the rendering for WebGL
  * @param canvas <cavnas> element
  * @param opt_debug flag to initialize the context for debugging

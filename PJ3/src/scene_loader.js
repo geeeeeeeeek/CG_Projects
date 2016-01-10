@@ -5,6 +5,9 @@
 
 window.onload = () => {
   let canvas = document.getElementById('webgl');
+  canvas.width = Math.max(document.documentElement.clientWidth, window.innerWidth || 0);
+  canvas.height = Math.max(document.documentElement.clientHeight, window.innerHeight || 0);
+  window.ratio = canvas.width / canvas.height;
   let gl = getWebGLContext(canvas);
   if (!gl) {
     console.log('Failed to get the rendering context for WebGL');
@@ -19,46 +22,22 @@ class SceneLoader {
   constructor(gl) {
     this.gl = gl;
     this.loaders = [];
-    this.keyboardListener = new KeyboardListener();
+    this.keyboardController = new KeyboardController();
   }
 
   init() {
 
-    this.rotation = [0, 0];
+    this.initKeyController();
 
-    let floorLoader = new TextureLoader(floorRes, {
-      'gl': this.gl,
-      'activeTextureIndex': 0,
-      'drawMode': 'TRIANGLE_STRIP',
-      'drawCount': 4
-    });
-    this.loaders.push(floorLoader);
-    floorLoader.init();
+    this.initLoaders();
 
-    let boxLoader = new TextureLoader(boxRes, {
-      'gl': this.gl,
-      'activeTextureIndex': 1,
-      'drawMode': 'TRIANGLE_FAN',
-      'drawCount': 24
-    });
-    this.loaders.push(boxLoader);
-    boxLoader.init();
-
-    for (let o of ObjectList) {
-      let loader = new ObjectLoader(o, {'gl': this.gl});
-      this.loaders.push(loader);
-      loader.init();
-    }
-
-    let render = () => {
+    let render = (timestamp) => {
       this.initWebGL();
 
-      if (this.keyboardListener.ON) {
-        this.initCamera();
-      }
+      this.initCamera(timestamp);
 
       for (let loader of this.loaders) {
-        loader.render();
+        loader.render(timestamp);
       }
 
       window.requestAnimationFrame(render);
@@ -75,107 +54,85 @@ class SceneLoader {
     this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
   }
 
-  initCamera() {
+  initKeyController() {
+    Camera.init();
+    let cameraMap = new Map();
+    cameraMap.set('W', 'posUp');
+    cameraMap.set('A', 'posLeft');
+    cameraMap.set('S', 'posDown');
+    cameraMap.set('D', 'posRight');
+    cameraMap.set('I', 'rotUp');
+    cameraMap.set('J', 'rotLeft');
+    cameraMap.set('K', 'rotDown');
+    cameraMap.set('L', 'rotRight');
+    cameraMap.set('F', 'flashLight');
 
-    let x = CameraPara.at[0] - CameraPara.eye[0];
-    let y = CameraPara.at[1] - CameraPara.eye[1];
-    let z = CameraPara.at[2] - CameraPara.eye[2];
+    cameraMap.forEach((val, key)=> {
+          this.keyboardController.bind(key, {
+            on: (()=> {
+              Camera.state[val] = 1;
+            }),
+            off: (()=> {
+              Camera.state[val] = 0;
+            })
+          });
+        }
+    )
+  }
 
-    let xzDistance = Math.sqrt(Math.pow(x, 2) + Math.pow(z, 2));
-    let yzDistance = Math.sqrt(Math.pow(y, 2) + Math.pow(z, 2));
+  initCamera(timestamp) {
+    let elapsed = timestamp - this.keyboardController.last;
+    this.keyboardController.last = timestamp;
 
-    let now = Date.now();
+    let posX = (Camera.state.posUp - Camera.state.posDown) * MOVE_VELOCITY * elapsed / 1000,
+        posY = (Camera.state.posRight - Camera.state.posLeft) * MOVE_VELOCITY * elapsed / 1000;
 
-    let RAD_ROT_VELOCITY = ROT_VELOCITY / 180 * Math.PI;
+    let rotX = (Camera.state.rotUp - Camera.state.rotDown) * ROT_VELOCITY * elapsed / 1000 / 180 * Math.PI,
+        rotY = (Camera.state.rotRight - Camera.state.rotLeft) * ROT_VELOCITY * elapsed / 1000 / 180 * Math.PI;
 
-    let eyeUp = this.keyboardListener.last['I'];
+    if (posX || posY) Camera.move(posX, posY);
+    if (rotX || rotY) Camera.rotate(rotX, rotY);
+  }
 
-    if (eyeUp) {
-      let sign = (this.rotation[0] > Math.PI / 2 && this.rotation[0] < Math.PI * 3 / 2) ? -1 : 1;
-      let angle = (now - eyeUp) / 1000 * RAD_ROT_VELOCITY;
+  initLoaders() {
+    // Load floor
+    let floorLoader = new TextureLoader(floorRes, {
+      'gl': this.gl,
+      'activeTextureIndex': 0,
+      'enableLight': true
+    }).init();
+    this.loaders.push(floorLoader);
 
-      let sinAngle = Math.sin(angle), cosAngle = Math.cos(angle);
+    //// Load box
+    let boxLoader = new TextureLoader(boxRes, {
+      'gl': this.gl,
+      'activeTextureIndex': 1,
+      'enableLight': true
+    }).init();
+    this.loaders.push(boxLoader);
 
-      console.log(0, CameraPara.at);
-      CameraPara.at[0] = (cosAngle - sign * y / xzDistance * sinAngle) * x + CameraPara.eye[0];
-      CameraPara.at[2] = (cosAngle - sign * y * sinAngle / xzDistance) * z + CameraPara.eye[2];
-      CameraPara.at[1] = (xzDistance * sign * sinAngle + y * cosAngle) + CameraPara.eye[1];
+    // Load box
+    let skyBoxLoader = new TextureLoader(skyBoxRes, {
+      'gl': this.gl,
+      'activeTextureIndex': 2,
+      'enableLight': false
+    }).init();
+    this.loaders.push(skyBoxLoader);
 
-      CameraPara.up[1] = Math.cos(this.rotation[0]);
-      CameraPara.up[2] = Math.sin(this.rotation[0]);
-      console.log(1, CameraPara.at);
-      this.keyboardListener.last['I'] = now;
+    // Load objects
+    for (let o of ObjectList) {
+      let loader = new ObjectLoader(o, {'gl': this.gl}).init();
+      // Add animation to bird
+      if (o.objFilePath.indexOf('bird') > 0) {
+        loader.nextFrame = (timestamp)=> {
+          let rot = (timestamp / 1000 * 145) % 360,
+              trans = (timestamp / 1000 * Math.PI) % (2 * Math.PI);
 
-      this.rotation[0] = ((this.rotation[0] + angle)) % (Math.PI * 2);
-      console.log(this.rotation[0] * 180 / Math.PI);
+          loader.entity.transform[1].content[0] = rot;
+          loader.entity.transform[2].content[1] = Math.sin(trans) * 2;
+        }
+      }
+      this.loaders.push(loader);
     }
-
-    let eyeDown = this.keyboardListener.last['K'];
-
-    if (eyeDown) {
-      let sign = (this.rotation[0] > Math.PI / 2 && this.rotation[0] < Math.PI * 3 / 2) ? -1 : 1;
-      let angle = -(now - eyeDown) / 1000 * RAD_ROT_VELOCITY;
-
-      let sinAngle = Math.sin(angle), cosAngle = Math.cos(angle);
-
-      console.log(0, CameraPara.at);
-      CameraPara.at[0] = (cosAngle - sign * y / xzDistance * sinAngle) * x + CameraPara.eye[0];
-      CameraPara.at[2] = (cosAngle - sign * y * sinAngle / xzDistance) * z + CameraPara.eye[2];
-      CameraPara.at[1] = (xzDistance * sign * sinAngle + y * cosAngle) + CameraPara.eye[1];
-
-      CameraPara.up[1] = Math.cos(this.rotation[0]);
-      CameraPara.up[2] = Math.sin(this.rotation[0]);
-      console.log(1, CameraPara.at);
-      this.keyboardListener.last['K'] = now;
-
-      this.rotation[0] = ((this.rotation[0] + angle) + Math.PI * 2) % (Math.PI * 2);
-      console.log(angle, this.rotation[0] * 180 / Math.PI);
-    }
-    let eyeLeft = this.keyboardListener.last['J'];
-
-    if (eyeLeft) {
-      let sign = (this.rotation[1] > Math.PI / 2 && this.rotation[1] < Math.PI * 3 / 2) ? -1 : 1;
-      let angle = -(now - eyeLeft) / 1000 * RAD_ROT_VELOCITY;
-
-      let sinAngle = Math.sin(angle), cosAngle = Math.cos(angle);
-
-      console.log(0, CameraPara.at);
-      CameraPara.at[1] = (cosAngle - sign * x / yzDistance * sinAngle) * y + CameraPara.eye[1];
-      CameraPara.at[2] = (cosAngle - sign * x * sinAngle / yzDistance) * z + CameraPara.eye[2];
-      CameraPara.at[0] = (yzDistance * sign * sinAngle + x * cosAngle) + CameraPara.eye[0];
-
-      //CameraPara.up[0] = Math.cos(this.rotation[0]);
-      //CameraPara.up[1] = Math.sin(this.rotation[1]);
-      console.log(1, CameraPara.at);
-      this.keyboardListener.last['J'] = now;
-
-      this.rotation[1] = ((this.rotation[1] + angle) + Math.PI * 2) % (Math.PI * 2);
-      console.log(angle, this.rotation[1] * 180 / Math.PI);
-    }
-
-    let eyeRight = this.keyboardListener.last['L'];
-
-
-    if (eyeRight) {
-      let sign = (this.rotation[1] > Math.PI / 2 && this.rotation[1] < Math.PI * 3 / 2) ? -1 : 1;
-      let angle = (now - eyeRight) / 1000 * RAD_ROT_VELOCITY;
-
-      let sinAngle = Math.sin(angle), cosAngle = Math.cos(angle);
-
-      console.log(0, CameraPara.at);
-      CameraPara.at[1] = (cosAngle - sign * x / yzDistance * sinAngle) * y + CameraPara.eye[1];
-      CameraPara.at[2] = (cosAngle - sign * x * sinAngle / yzDistance) * z + CameraPara.eye[2];
-      CameraPara.at[0] = (yzDistance * sign * sinAngle + x * cosAngle) + CameraPara.eye[0];
-
-      //CameraPara.up[1] = Math.cos(this.rotation[1]);
-      //CameraPara.up[2] = Math.sin(this.rotation[1]);
-      console.log(1, CameraPara.at);
-      this.keyboardListener.last['L'] = now;
-
-      this.rotation[1] = ((this.rotation[1] + angle)) % (Math.PI * 2);
-      console.log(this.rotation[1] * 180 / Math.PI);
-    }
-
-
   }
 }

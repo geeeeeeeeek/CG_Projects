@@ -29,6 +29,7 @@ class ObjectLoader {
     // Start reading the OBJ file
     this.readOBJFile(`${this.entity.objFilePath}`, this.buffers, 1, true);
 
+    return this;
   }
 
   initShaders() {
@@ -36,11 +37,34 @@ class ObjectLoader {
     let VSHADER_SOURCE = `
         attribute vec4 a_Position;
         attribute vec4 a_Color;
+        attribute vec4 a_Normal;
         uniform mat4 u_MvpMatrix;
+        uniform mat4 u_ModelMatrix;
+        uniform mat4 u_NormalMatrix;
         varying vec4 v_Color;
+        uniform vec3 u_Color;
+        uniform vec3 u_LightDirection;
+        uniform vec3 u_AmbientLight;
+        uniform vec3 u_PointLightColor;
+        uniform vec3 u_PointLightPosition;
         void main() {
           gl_Position = u_MvpMatrix * a_Position;
-          v_Color = vec4(a_Color.rgb, a_Color.a);
+
+          vec4 normal1 = u_NormalMatrix * a_Normal;
+
+          vec3 normal = normalize(normal1.xyz);
+
+          vec4 vertexPosition = u_ModelMatrix * a_Position;
+          vec3 pointLightDirection = normalize(u_PointLightPosition - vec3(vertexPosition));
+          float pointLightnDotL = max(dot(pointLightDirection, normal), 0.0);
+          vec3 pointLightDiffuse = u_PointLightColor * u_Color * pointLightnDotL;
+
+          float nDotL = max(dot(u_LightDirection, normal), 0.0);
+          vec3 u_DiffuseLight = vec3(1.0, 1.0, 1.0);
+          vec3 diffuse = u_DiffuseLight * u_Color * nDotL;
+          vec3 ambient = u_AmbientLight * u_Color;
+
+          v_Color = vec4(diffuse + ambient + pointLightDiffuse, a_Color.a);
         }`;
 
     // Fragment shader program
@@ -50,7 +74,7 @@ class ObjectLoader {
         #endif
         varying vec4 v_Color;
         void main() {
-          gl_FragColor = vec4(${this.entity.color[0]},${this.entity.color[1]},${this.entity.color[2]},1.0);
+          gl_FragColor = v_Color;
         }`;
 
     // Initialize shaders
@@ -65,7 +89,17 @@ class ObjectLoader {
     // Get the storage locations of attribute and uniform variables
     this.a_Position = this.gl.getAttribLocation(this.program, 'a_Position');
     this.a_Color = this.gl.getAttribLocation(this.program, 'a_Color');
+    this.a_Normal = this.gl.getAttribLocation(this.program, 'a_Normal');
     this.u_MvpMatrix = this.gl.getUniformLocation(this.program, 'u_MvpMatrix');
+    this.u_NormalMatrix = this.gl.getUniformLocation(this.program, 'u_NormalMatrix');
+    this.u_ModelMatrix = this.gl.getUniformLocation(this.program, 'u_ModelMatrix');
+
+
+    this.u_LightDirection = this.gl.getUniformLocation(this.program, 'u_LightDirection');
+    this.u_AmbientLight = this.gl.getUniformLocation(this.program, 'u_AmbientLight');
+    this.u_PointLightColor = this.gl.getUniformLocation(this.program, 'u_PointLightColor');
+    this.u_PointLightPosition = this.gl.getUniformLocation(this.program, 'u_PointLightPosition');
+    this.u_Color = this.gl.getUniformLocation(this.program, 'u_Color');
 
     this.gl.useProgram(this.program);
     this.gl.program = this.program;
@@ -73,6 +107,7 @@ class ObjectLoader {
 
   initPerspective() {
     this.g_modelMatrix = new Matrix4();
+    this.g_normalMatrix = new Matrix4();
     for (let t of this.entity.transform) {
       this.g_modelMatrix[t.type].apply(this.g_modelMatrix, t.content);
     }
@@ -113,7 +148,7 @@ class ObjectLoader {
     this.g_objDoc = objDoc;
   }
 
-  render() {
+  render(timestamp) {
     this.gl.useProgram(this.program);
     this.gl.program = this.program;
 
@@ -121,6 +156,30 @@ class ObjectLoader {
       this.onReadComplete();
     }
     if (!this.g_drawingInfo) return;
+
+    if (this.hasOwnProperty('nextFrame')) {
+      this.nextFrame(timestamp);
+      this.initPerspective();
+    }
+
+    let lightDirection = new Vector3(sceneDirectionLight);
+    lightDirection.normalize();
+    this.gl.uniform3fv(this.u_LightDirection, lightDirection.elements);
+    this.gl.uniform3fv(this.u_AmbientLight, new Vector3(sceneAmbientLight).elements);
+    if (Camera.state.flashLight) {
+      this.gl.uniform3fv(this.u_PointLightColor, new Vector3(scenePointLightColor).elements);
+      this.gl.uniform3fv(this.u_PointLightPosition, new Vector3(CameraPara.eye).elements);
+    } else {
+      this.gl.uniform3fv(this.u_PointLightColor, new Vector3([0,0,0]).elements);
+      this.gl.uniform3fv(this.u_PointLightPosition, new Vector3([0,0,0]).elements);
+    }
+
+    this.gl.uniform3fv(this.u_Color, new Vector3(this.entity.color).elements);
+
+    this.g_normalMatrix.setInverseOf(this.g_modelMatrix);
+    this.g_normalMatrix.transpose();
+    this.gl.uniformMatrix4fv(this.u_NormalMatrix, false, this.g_normalMatrix.elements);
+    this.gl.uniformMatrix4fv(this.u_ModelMatrix, false, this.g_modelMatrix.elements);
 
     let g_mvpMatrix = Camera.getMatrix();
     g_mvpMatrix.concat(this.g_modelMatrix);
@@ -140,6 +199,14 @@ class ObjectLoader {
 
     this.gl.vertexAttribPointer(this.a_Position, 3, this.gl.FLOAT, false, 0, 0);
     this.gl.enableVertexAttribArray(this.a_Position);
+
+
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buffers.normalBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, this.g_drawingInfo.normals, this.gl.STATIC_DRAW);
+
+    this.gl.vertexAttribPointer(this.a_Normal, 3, this.gl.FLOAT, false, 0, 0);
+    this.gl.enableVertexAttribArray(this.a_Normal);
+
 
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buffers.colorBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, this.g_drawingInfo.colors, this.gl.STATIC_DRAW);
